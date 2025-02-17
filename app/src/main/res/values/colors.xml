@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Primary Yellow swatch -->
+    <color name="yellow_200">#FFF3B1</color>
+    <color name="yellow_500">#FFE300</color>
+    <color name="yellow_700">#FFCC00</color>
+
+    <!-- Secondary Brown swatch -->
+    <color name="brown_200">#BC8F6A</color>
+    <color name="brown_500">#8B4513</color>
+    <color name="brown_700">#5C2E0D</color>
+
+    <!-- Other colors -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>
