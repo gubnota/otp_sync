@@ -50,6 +50,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.1"
@@ -79,7 +80,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation(libs.androidx.security.crypto)
     testImplementation(libs.junit)
     testImplementation(libs.junit.jupiter)
     androidTestImplementation(libs.androidx.junit)
@@ -88,10 +89,10 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-    testImplementation("junit:junit:4.13.2")
-    testImplementation("androidx.test:core:1.5.0")
-    testImplementation("org.robolectric:robolectric:4.11.1")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation ("androidx.datastore:datastore-preferences:1.0.0")
+    testImplementation(libs.junit)
+    testImplementation(libs.androidx.core)
+    testImplementation("org.robolectric:robolectric:4.12.1")
+    implementation(libs.okhttp)
+    implementation ("androidx.datastore:datastore-preferences:1.1.3")
     // implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
 }

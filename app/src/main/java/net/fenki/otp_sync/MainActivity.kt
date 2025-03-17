@@ -28,7 +28,7 @@ import android.util.Log
 import androidx.compose.ui.platform.LocalContext
 import net.fenki.otp_sync.domain.managers.PermissionManager
 import net.fenki.otp_sync.utils.getVersionInfo
-import net.fenki.otp_sync.domain.managers.EnvironmentManager
+//import net.fenki.otp_sync.domain.managers.EnvironmentManager
 
 class MainActivity : ComponentActivity() {
     private var allPermissionsGranted by mutableStateOf(false)
@@ -47,7 +47,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         
         // Initialize environment variables
-        EnvironmentManager.init(this)
+//        EnvironmentManager.init(this)
 
         // Check permissions before starting service
         val requiredPermissions = PermissionManager.getRequiredPermissions()
