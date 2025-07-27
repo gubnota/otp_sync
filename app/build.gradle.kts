@@ -68,7 +68,21 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    signingConfigs {
+        create("release") {
+            storeFile = file(appProperties.getProperty("RELEASE_STORE_FILE"))
+            storePassword = appProperties.getProperty(("RELEASE_STORE_PASSWORD"))
+            keyAlias = appProperties.getProperty(("RELEASE_KEY_ALIAS"))
+            keyPassword = appProperties.getProperty(("RELEASE_KEY_PASSWORD"))
+        }
+    }
 
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 }
 
 dependencies {

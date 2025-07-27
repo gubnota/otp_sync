@@ -3,6 +3,8 @@ package net.fenki.otp_sync
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.provider.Telephony
 import android.telephony.SmsMessage
 import android.util.Log
 import net.fenki.otp_sync.component.Cipher
@@ -27,45 +29,44 @@ class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         Log.d(TAG, "SMS received with action: ${intent.action}")
 
-        if (intent.action == "android.provider.Telephony.SMS_RECEIVED") {
-            val bundle = intent.extras
-            if (bundle != null) {
-                val pdus = bundle.get("pdus") as Array<*>?
-                Log.d(TAG, "PDUs size: ${pdus?.size}")
-
-                pdus?.forEach { pdu ->
-                    try {
-                        val format = bundle.getString("format", "3gpp")
-                        val smsMessage =
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                                SmsMessage.createFromPdu(pdu as ByteArray, format)
-                            } else {
-                                @Suppress("DEPRECATION")
-                                SmsMessage.createFromPdu(pdu as ByteArray)
-                            }
-
-                        val sender = smsMessage.displayOriginatingAddress
-                        val messageBody = smsMessage.messageBody
-                        val subscriptionId = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP_MR1) {
-                            bundle.getInt("subscription", -1)
-                        } else {
-                            -1
-                        }
-                        Log.d(TAG, "SMS from: $sender")
-                        Log.d(TAG, "Message: $messageBody") 
-                        Log.d(TAG, "Received on SIM: $subscriptionId")
-                        sendToBackend(context, "SMS", """
-                            SMS from: $sender
-                            Received on SIM: $subscriptionId
-                            $messageBody
-                        """.trimIndent())
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error processing SMS", e)
-                    }
-                }
-            } else {
+        if (intent.action == Telephony.Sms.Intents.SMS_RECEIVED_ACTION) {
+            val bundle = intent.extras ?: run {
                 Log.w(TAG, "Received null bundle with SMS intent")
+                return
             }
+
+            val pdus = bundle.get("pdus") as? Array<*> ?: return
+            val format = bundle.getString("format") ?: "3gpp"
+            val subscriptionId = bundle.getInt("subscription", -1)
+
+            val messages = pdus.mapNotNull { pdu ->
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        SmsMessage.createFromPdu(pdu as ByteArray, format)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        SmsMessage.createFromPdu(pdu as ByteArray)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse SMS pdu", e)
+                    null
+                }
+            }
+
+            if (messages.isEmpty()) return
+
+            val sender = messages.first().displayOriginatingAddress
+            val fullMessage = messages.joinToString(separator = "") { it.messageBody }
+
+            Log.d(TAG, "SMS from: $sender")
+            Log.d(TAG, "Message: $fullMessage")
+            Log.d(TAG, "Received on SIM: $subscriptionId")
+
+            sendToBackend(context, "SMS", """
+            SMS from: $sender
+            Received on SIM: $subscriptionId
+            $fullMessage
+        """.trimIndent())
         }
     }
 

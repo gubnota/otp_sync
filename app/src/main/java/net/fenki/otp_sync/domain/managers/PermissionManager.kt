@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 
 object PermissionManager {
@@ -39,5 +40,8 @@ object PermissionManager {
             ContextCompat.checkSelfPermission(context, it) == 
                 PackageManager.PERMISSION_GRANTED
         }
+    }
+    fun areNotificationsEnabled(context: Context): Boolean {
+        return NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
 }

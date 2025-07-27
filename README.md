@@ -13,6 +13,8 @@
 ```bash
 ./gradlew clean
 ./gradlew build
+./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
 TODO:
@@ -21,4 +23,4 @@ TODO:
 - [x] 2. add input fields as secret, URL to POST data, id of the user(s) to notify
 - [x] 3. add version code and name
 - [x] 4. add default secret to app-settings.properties
-- [ ] 5. notify about calls
+- [x] 5. notify about calls

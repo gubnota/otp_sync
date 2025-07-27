@@ -33,24 +33,37 @@ import net.fenki.otp_sync.utils.getVersionInfo
 
 @Composable
 fun MainScreen(
-        context: Context,
-        modifier: Modifier = Modifier,
-        onIdsChange: (String) -> Unit,
-        onSecretChange: (String) -> Unit,
-        onNotifyBackendChange: (Boolean) -> Unit,
-        onBackendUrlChange: (String) -> Unit,
-        onPermissionsClick: () -> Unit
+    context: Context,
+    modifier: Modifier = Modifier,
+    onIdsChange: (String) -> Unit,
+    onSecretChange: (String) -> Unit,
+    onNotifyBackendChange: (Boolean) -> Unit,
+    onBackendUrlChange: (String) -> Unit,
+    onPermissionsClick: () -> Unit
 ) {
     val dataStore = remember { DataStoreRepository(context) }
     val coroutineScope = rememberCoroutineScope()
-    
-    // DataStore values
-    val backendUrl by dataStore.backendUrl.collectAsState(initial = "")
-    val secret by dataStore.secret.collectAsState(initial = "")
-    val notifyBackend by dataStore.notifyBackend.collectAsState(initial = false)
-    val ids by dataStore.ids.collectAsState(initial = "")
 
-    // Remove local state variables and use DataStore values directly
+    val backendUrlFromStore by dataStore.backendUrl.collectAsState(initial = "")
+    val secretFromStore by dataStore.secret.collectAsState(initial = "")
+    val notifyBackend by dataStore.notifyBackend.collectAsState(initial = false)
+    val idsFromStore by dataStore.ids.collectAsState(initial = "")
+
+    var backendUrlLocal by remember { mutableStateOf(backendUrlFromStore) }
+    var secretLocal by remember { mutableStateOf(secretFromStore) }
+    var idsLocal by remember { mutableStateOf(idsFromStore) }
+
+    // Sync local with datastore if changed externally
+    LaunchedEffect(backendUrlFromStore) {
+        if (backendUrlLocal != backendUrlFromStore) backendUrlLocal = backendUrlFromStore
+    }
+    LaunchedEffect(secretFromStore) {
+        if (secretLocal != secretFromStore) secretLocal = secretFromStore
+    }
+    LaunchedEffect(idsFromStore) {
+        if (idsLocal != idsFromStore) idsLocal = idsFromStore
+    }
+
     var showError by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
@@ -68,7 +81,7 @@ fun MainScreen(
     }
 
     fun testBackend() {
-        if (backendUrl.isBlank()) {
+        if (backendUrlLocal.isBlank()) {
             showError = true
             errorMessage = "Please enter a backend URL"
             return
@@ -76,65 +89,53 @@ fun MainScreen(
 
         coroutineScope.launch {
             try {
-                // Create a new SmsReceiver instance just for testing
                 val testReceiver = SmsReceiver()
                 testReceiver.sendToBackend(
                     context = context,
                     type = "TEST",
                     data = "Connection test message"
                 )
-                
-                // If we get here without exception, show success message
                 showError = true
                 errorMessage = "Test message sent successfully!\n" +
-                        "URL: $backendUrl\n" +
-                        "IDs: $ids\n" +
-                        "Notifications enabled: $notifyBackend"
-                
+                    "URL: $backendUrlLocal\n" +
+                    "IDs: $idsLocal\n" +
+                    "Notifications enabled: $notifyBackend"
             } catch (e: Exception) {
-                // Handle different types of exceptions with user-friendly messages
                 showError = true
                 val baseError = when {
-                    e is java.net.UnknownHostException -> 
+                    e is java.net.UnknownHostException ->
                         "Could not resolve host address.\nPlease check if the URL is correct."
-                    
-                    e is java.net.ConnectException -> 
+                    e is java.net.ConnectException ->
                         "Could not connect to server.\nPlease check if:\n" +
-                        "- The server is running\n" +
-                        "- The port number is correct\n" +
-                        "- Your device has internet access"
-                    
+                            "- The server is running\n" +
+                            "- The port number is correct\n" +
+                            "- Your device has internet access"
                     e is javax.net.ssl.SSLHandshakeException ->
                         "SSL Certificate error.\nPlease check if:\n" +
-                        "- The URL uses the correct protocol (http/https)\n" +
-                        "- The server's SSL certificate is valid"
-                    
+                            "- The URL uses the correct protocol (http/https)\n" +
+                            "- The server's SSL certificate is valid"
                     e is java.net.SocketTimeoutException ->
                         "Connection timed out.\nThe server took too long to respond."
-                    
                     else -> "Unexpected error: ${e.message}"
                 }
-                
                 errorMessage = "Connection test failed!\n\n" +
-                        "$baseError\n\n" +
-                        "Configuration:\n" +
-                        "URL: $backendUrl\n" +
-                        "IDs: $ids\n" +
-                        "Notifications enabled: $notifyBackend"
+                    "$baseError\n\n" +
+                    "Configuration:\n" +
+                    "URL: $backendUrlLocal\n" +
+                    "IDs: $idsLocal\n" +
+                    "Notifications enabled: $notifyBackend"
             }
         }
     }
 
     Column(
-            modifier = modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .clickable { focusManager.clearFocus() },
-            verticalArrangement = Arrangement.SpaceBetween
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .clickable { focusManager.clearFocus() },
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(
-            verticalArrangement = Arrangement.Center
-        ) {
+        Column(verticalArrangement = Arrangement.Center) {
             Button(
                 onClick = onPermissionsClick,
                 modifier = Modifier.fillMaxWidth()
@@ -145,75 +146,78 @@ fun MainScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
-                    value = ids,
-                    onValueChange = { newValue ->
-                        coroutineScope.launch {
-                            dataStore.saveIds(newValue)
-                            onIdsChange(newValue)
-                        }
-                    },
-                    label = { Text("IDs") },
-                    modifier = Modifier.fillMaxWidth()
+                value = idsLocal,
+                onValueChange = {
+                    idsLocal = it
+                    coroutineScope.launch {
+                        dataStore.saveIds(it)
+                        onIdsChange(it)
+                    }
+                },
+                label = { Text("IDs") },
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
-                    value = secret,
-                    onValueChange = { newValue ->
-                        coroutineScope.launch {
-                            dataStore.saveSecret(newValue)
-                            onSecretChange(newValue)
-                        }
-                    },
-                    label = { Text("Secret") },
-    //                visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth()
+                value = secretLocal,
+                onValueChange = {
+                    secretLocal = it
+                    coroutineScope.launch {
+                        dataStore.saveSecret(it)
+                        onSecretChange(it)
+                    }
+                },
+                label = { Text("Secret") },
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             OutlinedTextField(
-                    value = backendUrl,
-                    onValueChange = { newValue ->
-                        coroutineScope.launch {
-                            dataStore.saveBackendUrl(newValue)
-                            onBackendUrlChange(newValue)
-                        }
-                    },
-                    label = { Text("Backend URL") },
-                    modifier = Modifier.fillMaxWidth()
+                value = backendUrlLocal,
+                onValueChange = {
+                    backendUrlLocal = it
+                    coroutineScope.launch {
+                        dataStore.saveBackendUrl(it)
+                        onBackendUrlChange(it)
+                    }
+                },
+                label = { Text("Backend URL") },
+                modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Notify Backend")
                 Switch(
-                        checked = notifyBackend,
-                        onCheckedChange = { checked ->
-                            coroutineScope.launch {
-                                dataStore.saveNotifyBackend(checked)
-                                onNotifyBackendChange(checked)
-                            }
+                    checked = notifyBackend,
+                    onCheckedChange = { checked ->
+                        coroutineScope.launch {
+                            dataStore.saveNotifyBackend(checked)
+                            onNotifyBackendChange(checked)
                         }
+                    }
                 )
             }
-            
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             Button(
-                    onClick = { testBackend() },
-                    enabled = backendUrl.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
+                onClick = { testBackend() },
+                enabled = backendUrlLocal.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Test Connection")
             }
         }
-        
-        // Add version at bottom
+
         Text(
             text = context.getVersionInfo(),
             style = MaterialTheme.typography.bodySmall,
@@ -224,17 +228,18 @@ fun MainScreen(
 
     if (showError) {
         AlertDialog(
-                onDismissRequest = { showError = false },
-                title = { Text("Test Result") },
-                text = { Text(errorMessage) },
-                confirmButton = {
-                    TextButton(onClick = { showError = false }) {
-                        Text("OK")
-                    }
+            onDismissRequest = { showError = false },
+            title = { Text("Test Result") },
+            text = { Text(errorMessage) },
+            confirmButton = {
+                TextButton(onClick = { showError = false }) {
+                    Text("OK")
                 }
+            }
         )
     }
 }
+
 
 @Preview(
     name = "MainScreen Preview",

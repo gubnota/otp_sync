@@ -2,6 +2,7 @@ package net.fenki.otp_sync
 
 import MainScreen
 import android.Manifest
+import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -24,8 +25,12 @@ import androidx.core.content.ContextCompat
 import net.fenki.otp_sync.ui.components.PermissionRequestScreen
 import net.fenki.otp_sync.ui.theme.Otp_syncTheme
 import android.content.Context
+import android.net.Uri
+import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.NotificationManagerCompat
 import net.fenki.otp_sync.domain.managers.PermissionManager
 import net.fenki.otp_sync.utils.getVersionInfo
 //import net.fenki.otp_sync.domain.managers.EnvironmentManager
@@ -34,19 +39,41 @@ class MainActivity : ComponentActivity() {
     private var allPermissionsGranted by mutableStateOf(false)
     private var showSettings by mutableStateOf(false)
     private val PERMISSION_REQUEST_CODE = 1001
-    private val requestPermissionLauncher =
-            registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-                allPermissionsGranted = permissions.all { it.value }
-                if (allPermissionsGranted) {
-                    startSmsCallService()
-                }
-            }
+  private val requestPermissionLauncher =
+    registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+      allPermissionsGranted = permissions.all { it.value }
+
+      if (allPermissionsGranted) {
+        if (!areNotificationsEnabled()) {
+          openNotificationSettings()
+        } else {
+          startSmsCallService()
+        }
+      } else {
+        // Разрешения не даны — предложить вручную включить в настройках
+        Toast.makeText(this, "Некоторые разрешения не получены. Откройте настройки вручную.", Toast.LENGTH_LONG).show()
+        openAppSettings()
+      }
+    }
+
+  fun areAllPermissionsGranted(context: Context): Boolean {
+    val required = PermissionManager.getRequiredPermissions()
+    return required.all {
+      ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    }
+  }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        
-        // Initialize environment variables
+      allPermissionsGranted = areAllPermissionsGranted(this)
+      if (!allPermissionsGranted) {
+        checkAndRequestPermissions()
+      } else {
+        startSmsCallService()
+        showSettings = true
+      }
+      // Initialize environment variables
 //        EnvironmentManager.init(this)
 
         // Check permissions before starting service
@@ -76,28 +103,42 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    private fun checkAndRequestPermissions() {
-        val requiredPermissions = PermissionManager.getRequiredPermissions()
-        val permissionsToRequest = requiredPermissions
-            .filter {
-                ContextCompat.checkSelfPermission(this, it) !=
-                    PackageManager.PERMISSION_GRANTED
-            }
-            .toTypedArray()
-
-        if (permissionsToRequest.isNotEmpty()) {
-            requestPermissionLauncher.launch(permissionsToRequest)
-        } else {
-            startSmsCallService()
-        }
-        Log.d("checkAndRequestP","${permissionsToRequest.joinToString(",")}, $allPermissionsGranted, $showSettings");
-
-        if(permissionsToRequest.isEmpty()) {
-            allPermissionsGranted = true; showSettings = true;
-            Log.d("checkAndRequestP","$allPermissionsGranted, $showSettings");
-        }
+  fun isNotificationChannelEnabled(context: Context, channelId: String): Boolean {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+      val channel = manager.getNotificationChannel(channelId)
+      channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
+    } else {
+      NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
+  }
+
+  private fun checkAndRequestPermissions() {
+    val requiredPermissions = PermissionManager.getRequiredPermissions()
+
+    val permissionsToRequest = requiredPermissions
+      .filter {
+        ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+      }
+      .toTypedArray()
+
+    if (permissionsToRequest.isNotEmpty()) {
+      requestPermissionLauncher.launch(permissionsToRequest)
+      return
+    }
+
+    // 👇 check if foreground channel is enabled
+    val channelEnabled = isNotificationChannelEnabled(this, "SmsCallForegroundServiceChannel")
+    if (!channelEnabled) {
+      Toast.makeText(this, "Notifications are disabled for service channel", Toast.LENGTH_LONG).show()
+      openNotificationSettings()
+      return
+    }
+
+    allPermissionsGranted = true
+    showSettings = true
+    startSmsCallService()
+  }
 
     private fun startSmsCallService() {
         val serviceIntent = Intent(this, SmsCallForegroundService::class.java)
@@ -107,6 +148,31 @@ class MainActivity : ComponentActivity() {
             startService(serviceIntent)
         }
     }
+  private fun areNotificationsEnabled(): Boolean {
+    return NotificationManagerCompat.from(this).areNotificationsEnabled()
+  }
+
+  private fun openNotificationSettings() {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+      putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+    }
+    startActivity(intent)
+  }
+
+  private fun openAppSettings() {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+      data = Uri.fromParts("package", packageName, null)
+    }
+    startActivity(intent)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    if (areAllPermissionsGranted(this) && areNotificationsEnabled()) {
+      startSmsCallService()
+      showSettings = true
+    }
+  }
 }
 
 @Composable
