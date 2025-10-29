@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import net.fenki.otp_sync.utils.MessageHashHelper
 
 class SmsReceiver : BroadcastReceiver() {
     companion object {
@@ -85,13 +86,23 @@ class SmsReceiver : BroadcastReceiver() {
         return "${fixedUrl}receive_data"
     }
 
-     fun sendToBackend(context: Context, type: String, data: String) {
+    fun sendToBackend(context: Context, type: String, data: String) {
         val dataStore = DataStoreRepository(context)
-        
+
         receiverScope.launch {
+            // Add hash-based deduplication
+            val messageHash = MessageHashHelper.generateHash(type, data)
+
+            if (!MessageHashHelper.shouldSendMessage(
+                    SmsCallForegroundService.sentMessageHashes,
+                    messageHash
+                )) {
+                Log.i(TAG, "Duplicate message detected, skipping")
+                return@launch
+            }
+
             val backendUrl = validateAndFixUrl(dataStore.backendUrl.first())
             val secret = dataStore.secret.first()
-//            if (secret == "") secret =
             val notifyBackend = dataStore.notifyBackend.first()
             val ids = dataStore.ids.first()
 
@@ -102,11 +113,10 @@ class SmsReceiver : BroadcastReceiver() {
 
             if (backendUrl.isNotEmpty()) {
                 val client = MyHttpClient(context).create()
-                val cypher = Cipher(secret)
-                val encryptedData = "$ids\n$type\n$data" //cypher.encrypt("$type\n$data")
-                
+                val encryptedData = "$ids\n$type\n$data"
+
                 val requestBody = encryptedData.toRequestBody("text/plain".toMediaType())
-                
+
                 val request = Request.Builder()
                     .url(backendUrl)
                     .header("X-Auth-Key", secret)
@@ -123,7 +133,7 @@ class SmsReceiver : BroadcastReceiver() {
                             if (!response.isSuccessful) {
                                 Log.e(TAG, "Backend request failed: ${response.code}")
                             } else {
-                                Log.i(TAG, "Successfully sent data to backend")
+                                Log.i(TAG, "Successfully sent data to backend (hash: $messageHash)")
                             }
                         }
                     }
@@ -133,4 +143,5 @@ class SmsReceiver : BroadcastReceiver() {
             }
         }
     }
+
 }

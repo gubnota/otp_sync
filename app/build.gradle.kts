@@ -1,6 +1,8 @@
 import java.io.FileInputStream
 import java.util.Properties
-
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.jetbrains.kotlin.android)
@@ -41,7 +43,20 @@ android {
             buildConfigField("String", "backend_url", appProperties.getProperty("backend_url"))
         }
     }
-    compileOptions {
+    val buildTime = SimpleDateFormat("yyyyMMddHHmm", Locale.US).format(Date())
+    applicationVariants.all{
+        outputs.all {
+            val outputImpl = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val projName = rootProject.name
+            val version = android.defaultConfig.versionName
+            val suffix = when (name){
+                "debug"-> "-debug"
+                else -> ""
+            }
+            outputImpl.outputFileName = "${projName}-${version}-${buildTime}${suffix}.apk"
+        }
+    }
+        compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
     }

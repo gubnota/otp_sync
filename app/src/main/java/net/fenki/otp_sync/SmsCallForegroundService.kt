@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import android.provider.CallLog
 import android.provider.Telephony
 import android.telephony.TelephonyCallback
+import net.fenki.otp_sync.utils.MessageHashHelper
 import net.fenki.otp_sync.utils.NotifiedCacheHelper
 
 class SmsCallForegroundService : Service() {
@@ -43,6 +44,8 @@ class SmsCallForegroundService : Service() {
     companion object {
         @Volatile
         var isServiceRunning = false
+        // Change from call/SMS specific caches to hash-based cache
+        val sentMessageHashes = mutableMapOf<String, Long>()
         private val notifiedSms = mutableMapOf<String, Long>()
         private val notifiedCalls = mutableMapOf<String, Long>()
 
@@ -177,11 +180,13 @@ class SmsCallForegroundService : Service() {
     }
     private fun handleCallState(state: Int) {
         if (state == TelephonyManager.CALL_STATE_RINGING) {
-
+            // Only use the delayed handler
             Handler(Looper.getMainLooper()).postDelayed({
                 queryCallLogAndNotify()
             }, 2000) // 2 seconds
 
+            // REMOVE THIS ENTIRE BLOCK - it's causing the duplicate:
+            /*
             val cursor = contentResolver.query(
                 CallLog.Calls.CONTENT_URI,
                 arrayOf(
@@ -213,6 +218,7 @@ class SmsCallForegroundService : Service() {
                     }
                 }
             }
+            */
         }
     }
 
@@ -299,8 +305,18 @@ class SmsCallForegroundService : Service() {
         NotifiedCacheHelper.cleanOldEntries(notifiedSms)
     }
 
+
     private fun sendToBackend(type: String, data: String) {
         serviceScope.launch {
+            // Generate hash for deduplication
+            val messageHash = MessageHashHelper.generateHash(type, data)
+
+            // Check if we should send (not sent today)
+            if (!MessageHashHelper.shouldSendMessage(sentMessageHashes, messageHash)) {
+                Log.d("SmsCallForegroundSvc", "Duplicate message detected, skipping: $messageHash")
+                return@launch
+            }
+
             val backendUrl = validateAndFixUrl(dataStore.backendUrl.first())
             val secret = dataStore.secret.first()
             val notifyBackend = dataStore.notifyBackend.first()
@@ -327,13 +343,14 @@ class SmsCallForegroundService : Service() {
                         if (!it.isSuccessful) {
                             Log.e("SmsCallForegroundSvc", "Failed: ${it.code}")
                         } else {
-                            Log.i("SmsCallForegroundSvc", "Data sent successfully")
+                            Log.i("SmsCallForegroundSvc", "Data sent successfully (hash: $messageHash)")
                         }
                     }
                 }
             })
         }
     }
+}
 
     private fun validateAndFixUrl(url: String): String {
         var fixedUrl = url.trim()
@@ -346,4 +363,3 @@ class SmsCallForegroundService : Service() {
         }
         return if (!fixedUrl.endsWith("/")) "$fixedUrl/receive_data" else "$fixedUrl/receive_data"
     }
-}
