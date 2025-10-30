@@ -33,55 +33,50 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.app.NotificationManagerCompat
 import net.fenki.otp_sync.domain.managers.PermissionManager
 import net.fenki.otp_sync.utils.getVersionInfo
-//import net.fenki.otp_sync.domain.managers.EnvironmentManager
 
 class MainActivity : ComponentActivity() {
     private var allPermissionsGranted by mutableStateOf(false)
     private var showSettings by mutableStateOf(false)
     private val PERMISSION_REQUEST_CODE = 1001
-  private val requestPermissionLauncher =
-    registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-      allPermissionsGranted = permissions.all { it.value }
+    private val requestPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            allPermissionsGranted = permissions.all { it.value }
 
-      if (allPermissionsGranted) {
-        if (!areNotificationsEnabled()) {
-          openNotificationSettings()
-        } else {
-          startSmsCallService()
+            if (allPermissionsGranted) {
+                if (!areNotificationsEnabled()) {
+                    openNotificationSettings()
+                } else {
+                    startSmsCallService()
+                }
+            } else {
+                Toast.makeText(this, "Some permissions were not granted. Please enable them in settings.", Toast.LENGTH_LONG).show()
+                openAppSettings()
+            }
         }
-      } else {
-        // Разрешения не даны — предложить вручную включить в настройках
-        Toast.makeText(this, "Некоторые разрешения не получены. Откройте настройки вручную.", Toast.LENGTH_LONG).show()
-        openAppSettings()
-      }
-    }
 
-  fun areAllPermissionsGranted(context: Context): Boolean {
-    val required = PermissionManager.getRequiredPermissions()
-    return required.all {
-      ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+    fun areAllPermissionsGranted(context: Context): Boolean {
+        val required = PermissionManager.getRequiredPermissions()
+        return required.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
     }
-  }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-      allPermissionsGranted = areAllPermissionsGranted(this)
-      if (!allPermissionsGranted) {
-        checkAndRequestPermissions()
-      } else {
-        startSmsCallService()
-        showSettings = true
-      }
-      // Initialize environment variables
-//        EnvironmentManager.init(this)
+        allPermissionsGranted = areAllPermissionsGranted(this)
+        if (!allPermissionsGranted) {
+            checkAndRequestPermissions()
+        } else {
+            startSmsCallService()
+            showSettings = true
+        }
 
-        // Check permissions before starting service
         val requiredPermissions = PermissionManager.getRequiredPermissions()
         allPermissionsGranted = requiredPermissions.all {
             ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
         }
-        if (!allPermissionsGranted) checkAndRequestPermissions();
+        if (!allPermissionsGranted) checkAndRequestPermissions()
 
         if (allPermissionsGranted) {
             startSmsCallService()
@@ -92,53 +87,53 @@ class MainActivity : ComponentActivity() {
             Otp_syncTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     MainContent(
-                            allPermissionsGranted = allPermissionsGranted,
-                            onRequestPermissions = { checkAndRequestPermissions() },
-                            modifier = Modifier.padding(innerPadding),
-                            context = this,
-                            showSettings = showSettings,
-                            onSettingsChange = { showSettings = it }
+                        allPermissionsGranted = allPermissionsGranted,
+                        onRequestPermissions = { checkAndRequestPermissions() },
+                        modifier = Modifier.padding(innerPadding),
+                        context = this,
+                        showSettings = showSettings,
+                        onSettingsChange = { showSettings = it }
                     )
                 }
             }
         }
     }
-  fun isNotificationChannelEnabled(context: Context, channelId: String): Boolean {
-    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-      val channel = manager.getNotificationChannel(channelId)
-      channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
-    } else {
-      NotificationManagerCompat.from(context).areNotificationsEnabled()
-    }
-  }
 
-  private fun checkAndRequestPermissions() {
-    val requiredPermissions = PermissionManager.getRequiredPermissions()
-
-    val permissionsToRequest = requiredPermissions
-      .filter {
-        ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-      }
-      .toTypedArray()
-
-    if (permissionsToRequest.isNotEmpty()) {
-      requestPermissionLauncher.launch(permissionsToRequest)
-      return
+    fun isNotificationChannelEnabled(context: Context, channelId: String): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channel = manager.getNotificationChannel(channelId)
+            channel != null && channel.importance != NotificationManager.IMPORTANCE_NONE
+        } else {
+            NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
     }
 
-    // 👇 check if foreground channel is enabled
-    val channelEnabled = isNotificationChannelEnabled(this, "SmsCallForegroundServiceChannel")
-    if (!channelEnabled) {
-      Toast.makeText(this, "Notifications are disabled for service channel", Toast.LENGTH_LONG).show()
-      openNotificationSettings()
-      return
-    }
+    private fun checkAndRequestPermissions() {
+        val requiredPermissions = PermissionManager.getRequiredPermissions()
 
-    allPermissionsGranted = true
-    showSettings = true
-    startSmsCallService()
-  }
+        val permissionsToRequest = requiredPermissions
+            .filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            .toTypedArray()
+
+        if (permissionsToRequest.isNotEmpty()) {
+            requestPermissionLauncher.launch(permissionsToRequest)
+            return
+        }
+
+        val channelEnabled = isNotificationChannelEnabled(this, "SmsCallForegroundServiceChannel")
+        if (!channelEnabled) {
+            Toast.makeText(this, "Notifications are disabled for service channel", Toast.LENGTH_LONG).show()
+            openNotificationSettings()
+            return
+        }
+
+        allPermissionsGranted = true
+        showSettings = true
+        startSmsCallService()
+    }
 
     private fun startSmsCallService() {
         val serviceIntent = Intent(this, SmsCallForegroundService::class.java)
@@ -148,58 +143,59 @@ class MainActivity : ComponentActivity() {
             startService(serviceIntent)
         }
     }
-  private fun areNotificationsEnabled(): Boolean {
-    return NotificationManagerCompat.from(this).areNotificationsEnabled()
-  }
 
-  private fun openNotificationSettings() {
-    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
-      putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+    private fun areNotificationsEnabled(): Boolean {
+        return NotificationManagerCompat.from(this).areNotificationsEnabled()
     }
-    startActivity(intent)
-  }
 
-  private fun openAppSettings() {
-    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-      data = Uri.fromParts("package", packageName, null)
+    private fun openNotificationSettings() {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        }
+        startActivity(intent)
     }
-    startActivity(intent)
-  }
 
-  override fun onResume() {
-    super.onResume()
-    if (areAllPermissionsGranted(this) && areNotificationsEnabled()) {
-      startSmsCallService()
-      showSettings = true
+    private fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        startActivity(intent)
     }
-  }
+
+    override fun onResume() {
+        super.onResume()
+        if (areAllPermissionsGranted(this) && areNotificationsEnabled()) {
+            startSmsCallService()
+            showSettings = true
+        }
+    }
 }
 
 @Composable
 fun MainContent(
-        allPermissionsGranted: Boolean,
-        onRequestPermissions: () -> Unit,
-        modifier: Modifier = Modifier,
-        context: Context,
-        showSettings: Boolean,
-        onSettingsChange: (Boolean) -> Unit
+    allPermissionsGranted: Boolean,
+    onRequestPermissions: () -> Unit,
+    modifier: Modifier = Modifier,
+    context: Context,
+    showSettings: Boolean,
+    onSettingsChange: (Boolean) -> Unit
 ) {
     if (allPermissionsGranted || showSettings) {
         MainScreen(
-                context = context,
-                onIdsChange = {},
-                onSecretChange = {},
-                onNotifyBackendChange = {},
-                onBackendUrlChange = {},
-                modifier = modifier,
-                onPermissionsClick = { onSettingsChange(false) }
+            context = context,
+            onIdsChange = {},
+            onSecretChange = {},
+            onNotifyBackendChange = {},
+            onBackendUrlChange = {},
+            modifier = modifier,
+            onPermissionsClick = { onSettingsChange(false) }
         )
     } else {
         PermissionRequestScreen(
-                onRequestPermissions = onRequestPermissions,
-                modifier = modifier,
-                onSettingsClick = { onSettingsChange(true) },
-                context = context
+            onRequestPermissions = onRequestPermissions,
+            modifier = modifier,
+            onSettingsClick = { onSettingsChange(true) },
+            context = context
         )
     }
 }

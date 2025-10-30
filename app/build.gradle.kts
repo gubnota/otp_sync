@@ -123,5 +123,7 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.12.1")
     implementation(libs.okhttp)
     implementation ("androidx.datastore:datastore-preferences:1.1.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.6.4")
+    implementation("androidx.compose.foundation:foundation:1.5.1")
     // implementation("io.github.cdimascio:dotenv-kotlin:6.4.1")
 }

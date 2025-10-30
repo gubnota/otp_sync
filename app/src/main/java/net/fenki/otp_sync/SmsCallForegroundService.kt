@@ -1,4 +1,5 @@
 package net.fenki.otp_sync
+
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,6 +14,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyManager
+import android.telephony.TelephonyCallback
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import okhttp3.Call
@@ -29,9 +31,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import android.provider.CallLog
 import android.provider.Telephony
-import android.telephony.TelephonyCallback
-import net.fenki.otp_sync.utils.MessageHashHelper
+import androidx.annotation.RequiresApi
 import net.fenki.otp_sync.utils.NotifiedCacheHelper
+import org.json.JSONArray
+import org.json.JSONObject
 
 class SmsCallForegroundService : Service() {
 
@@ -39,12 +42,12 @@ class SmsCallForegroundService : Service() {
     private lateinit var dataStore: DataStoreRepository
     private val serviceScope = CoroutineScope(Dispatchers.IO)
     private val pollHandler = Handler(Looper.getMainLooper())
-    private val pollInterval = 60_000L // 1 minute
+    private val pollInterval = 60_000L
+    private val healthCheckInterval = 600_000L
 
     companion object {
         @Volatile
         var isServiceRunning = false
-        // Change from call/SMS specific caches to hash-based cache
         val sentMessageHashes = mutableMapOf<String, Long>()
         private val notifiedSms = mutableMapOf<String, Long>()
         private val notifiedCalls = mutableMapOf<String, Long>()
@@ -70,8 +73,19 @@ class SmsCallForegroundService : Service() {
 
     private val pollRunnable = object : Runnable {
         override fun run() {
-            pollCallLogAndSms()
+            serviceScope.launch {
+                pollCallLogAndSms()
+            }
             pollHandler.postDelayed(this, pollInterval)
+        }
+    }
+
+    private val healthCheckRunnable = object : Runnable {
+        override fun run() {
+            serviceScope.launch {
+                checkBackendHealth()
+            }
+            pollHandler.postDelayed(this, healthCheckInterval)
         }
     }
 
@@ -84,8 +98,18 @@ class SmsCallForegroundService : Service() {
         Log.d("SmsCallForegroundSvc", "onStartCommand")
         startForeground(1, createNotification())
         pollHandler.post(pollRunnable)
+        pollHandler.post(healthCheckRunnable)
         setupCallListener()
         isServiceRunning = true
+
+        if (intent?.action == "TEST_NOTIFICATION") {
+            pollHandler.postDelayed({
+                serviceScope.launch {
+                    sendTestNotification()
+                }
+            }, 1000)
+        }
+
         return START_STICKY
     }
 
@@ -93,6 +117,10 @@ class SmsCallForegroundService : Service() {
         super.onDestroy()
         isServiceRunning = false
         pollHandler.removeCallbacks(pollRunnable)
+        pollHandler.removeCallbacks(healthCheckRunnable)
+        serviceScope.launch {
+            // Cleanup coroutines
+        }
         Log.d("SmsCallForegroundSvc", "Service destroyed")
     }
 
@@ -104,9 +132,11 @@ class SmsCallForegroundService : Service() {
             val channel = NotificationChannel(
                 channelId,
                 "SMS and Call Tracker",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Tracks incoming calls and sends them to backend"
+                description = "Tracks incoming calls and SMS messages"
+                setSound(null, null)
+                enableVibration(false)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
@@ -119,12 +149,14 @@ class SmsCallForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("SMS and Call Tracker")
-            .setContentText("Monitoring calls and SMS...")
-            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("OTP Sync Service")
+            .setContentText("Monitoring SMS and calls...")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setSound(null)
+            .setVibrate(null)
             .build()
     }
 
@@ -148,8 +180,18 @@ class SmsCallForegroundService : Service() {
             }, PhoneStateListener.LISTEN_CALL_STATE)
         }
     }
-    private fun queryCallLogAndNotify() {
-        val now = System.currentTimeMillis()
+
+    private fun handleCallState(state: Int) {
+        if (state == TelephonyManager.CALL_STATE_RINGING) {
+            Handler(Looper.getMainLooper()).postDelayed({
+                serviceScope.launch {
+                    queryCallLogAndNotify()
+                }
+            }, 2000)
+        }
+    }
+
+    private suspend fun queryCallLogAndNotify() {
         val cursor = contentResolver.query(
             CallLog.Calls.CONTENT_URI,
             arrayOf(CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.PHONE_ACCOUNT_ID, CallLog.Calls.DATE),
@@ -162,91 +204,22 @@ class SmsCallForegroundService : Service() {
             if (it.moveToFirst()) {
                 val id = it.getString(0)
                 val number = it.getString(1) ?: "unknown"
-                val simId = it.getString(2) ?: "unknown"
+                val simId = it.getString(2) ?: "1"
                 val date = it.getLong(3)
 
                 if (NotifiedCacheHelper.shouldNotify(notifiedCalls, id, date)) {
-                    val formatted = NotifiedCacheHelper.formatTimestamp(date)
-                    val message = """
-                    📞 Incoming call
-                    Number: $number
-                    SIM: $simId
-                    Time: $formatted
-                """.trimIndent()
-                    sendToBackend("Call", message)
+                    sendToBackendBulk("call", number, simId, date)
                 }
             }
         }
     }
-    private fun handleCallState(state: Int) {
-        if (state == TelephonyManager.CALL_STATE_RINGING) {
-            // Only use the delayed handler
-            Handler(Looper.getMainLooper()).postDelayed({
-                queryCallLogAndNotify()
-            }, 2000) // 2 seconds
 
-            // REMOVE THIS ENTIRE BLOCK - it's causing the duplicate:
-            /*
-            val cursor = contentResolver.query(
-                CallLog.Calls.CONTENT_URI,
-                arrayOf(
-                    CallLog.Calls._ID,
-                    CallLog.Calls.NUMBER,
-                    CallLog.Calls.PHONE_ACCOUNT_ID,
-                    CallLog.Calls.DATE
-                ),
-                "${CallLog.Calls.TYPE} = ?",
-                arrayOf(CallLog.Calls.INCOMING_TYPE.toString()),
-                "${CallLog.Calls.DATE} DESC"
-            )
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val id = it.getString(0)
-                    val number = it.getString(1) ?: "unknown"
-                    val simId = it.getString(2) ?: "unknown"
-                    val date = it.getLong(3)
-                    val cacheKey = "$number-$date"
-                    if (NotifiedCacheHelper.shouldNotify(notifiedCalls, id, date)) {
-                        val formatted = NotifiedCacheHelper.formatTimestamp(date)
-                        val message = """
-                            📞 Incoming call
-                            Number: $number
-                            SIM: $simId
-                            Time: $formatted
-                        """.trimIndent()
-                        sendToBackend("Call", message)
-                    }
-                }
-            }
-            */
-        }
-    }
-
-    private fun pollCallLogAndSms() {
+    private suspend fun pollCallLogAndSms() {
         val now = System.currentTimeMillis()
+        val messages = JSONArray()
+        val userIds = getUserIds()
 
-        val callCursor = contentResolver.query(
-            CallLog.Calls.CONTENT_URI,
-            arrayOf(CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.DATE),
-            null, null, "${CallLog.Calls.DATE} DESC"
-        )
-        callCursor?.use {
-            while (it.moveToNext()) {
-                val id = it.getString(0)
-                val number = it.getString(1) ?: "unknown"
-                val date = it.getLong(2)
-
-                if (NotifiedCacheHelper.shouldNotify(notifiedCalls, id, date)) {
-                    val message = """
-                        📞 Missed or recent call
-                        From: $number
-                        Time: ${NotifiedCacheHelper.formatTimestamp(date)}
-                    """.trimIndent()
-                    sendToBackend("Call", message)
-                }
-            }
-        }
-
+        // Poll SMS
         val smsCursor = contentResolver.query(
             Telephony.Sms.Inbox.CONTENT_URI,
             arrayOf(Telephony.Sms._ID, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.ADDRESS, Telephony.Sms.READ),
@@ -261,96 +234,205 @@ class SmsCallForegroundService : Service() {
                 val read = it.getInt(4)
 
                 if (NotifiedCacheHelper.shouldNotify(notifiedSms, id, date)) {
-                    val formatted = NotifiedCacheHelper.formatTimestamp(date)
-                    val message = """
-                        📩 Incoming SMS
-                        From: $sender
-                        Time: $formatted
-                        Body: $body
-                    """.trimIndent()
-                    sendToBackend("SMS", message)
-                }
-                // ✅ Mark SMS as read after 10 minutes
-                if (now - date > 10 * 60 * 1000L && read == 0) {
-                    val values = ContentValues().apply { put(Telephony.Sms.READ, 1) }
-                    val updated = contentResolver.update(
-                        Telephony.Sms.Inbox.CONTENT_URI,
-                        values,
-                        "${Telephony.Sms._ID}=?",
-                        arrayOf(id)
-                    )
-                    Log.d("Cleanup", "Marked SMS $id as read ($updated rows)")
-                }
-                // 🧹 Delete SMS older than 1 hour
-                if (now - date > NotifiedCacheHelper.MAX_AGE_MILLIS) {
-                    val deleted = contentResolver.delete(
-                        Telephony.Sms.Inbox.CONTENT_URI,
-                        "${Telephony.Sms._ID}=?",
-                        arrayOf(id)
-                    )
-                    Log.d("Cleanup", "Deleted old SMS $id ($deleted rows)")
+                    val msgObj = JSONObject().apply {
+                        put("ids", userIds)
+                        put("sms", body)
+                    }
+                    messages.put(msgObj)
                 }
 
-                if (NotifiedCacheHelper.isExpired(date)) {
-                    contentResolver.delete(
-                        Telephony.Sms.Inbox.CONTENT_URI,
-                        "${Telephony.Sms._ID}=?",
-                        arrayOf(id)
-                    )
+//                if (now - date > 10 * 60 * 1000L && read == 0) {
+//                    val values = ContentValues().apply { put(Telephony.Sms.READ, 1) }
+//                    contentResolver.update(
+//                        Telephony.Sms.Inbox.CONTENT_URI,
+//                        values,
+//                        "${Telephony.Sms._ID}=?",
+//                        arrayOf(id)
+//                    )
+//                }
+//
+//                if (now - date > NotifiedCacheHelper.MAX_AGE_MILLIS) {
+//                    contentResolver.delete(
+//                        Telephony.Sms.Inbox.CONTENT_URI,
+//                        "${Telephony.Sms._ID}=?",
+//                        arrayOf(id)
+//                    )
+//                }
+            }
+        }
+
+        // Poll Incoming Calls
+        val callCursor = contentResolver.query(
+            CallLog.Calls.CONTENT_URI,
+            arrayOf(CallLog.Calls._ID, CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.TYPE),
+            "${CallLog.Calls.TYPE} = ?",
+            arrayOf(CallLog.Calls.INCOMING_TYPE.toString()),
+            "${CallLog.Calls.DATE} DESC"
+        )
+        callCursor?.use {
+            while (it.moveToNext()) {
+                val id = it.getString(0)
+                val number = it.getString(1) ?: "unknown"
+                val date = it.getLong(2)
+
+                if (NotifiedCacheHelper.shouldNotify(notifiedCalls, id, date)) {
+                    val msgObj = JSONObject().apply {
+                        put("ids", userIds)
+                        put("call", true)
+                        put("from", number)
+                        put("to", getSimName(1))
+                    }
+                    messages.put(msgObj)
                 }
             }
+        }
+
+        if (messages.length() > 0) {
+            sendToBackend(messages.toString())
         }
 
         NotifiedCacheHelper.cleanOldEntries(notifiedCalls)
         NotifiedCacheHelper.cleanOldEntries(notifiedSms)
     }
 
-
-    private fun sendToBackend(type: String, data: String) {
-        serviceScope.launch {
-            // Generate hash for deduplication
-            val messageHash = MessageHashHelper.generateHash(type, data)
-
-            // Check if we should send (not sent today)
-            if (!MessageHashHelper.shouldSendMessage(sentMessageHashes, messageHash)) {
-                Log.d("SmsCallForegroundSvc", "Duplicate message detected, skipping: $messageHash")
-                return@launch
-            }
-
-            val backendUrl = validateAndFixUrl(dataStore.backendUrl.first())
-            val secret = dataStore.secret.first()
-            val notifyBackend = dataStore.notifyBackend.first()
-            val ids = dataStore.ids.first()
-
-            if (!notifyBackend || backendUrl.isEmpty()) return@launch
-
-            val client = MyHttpClient(this@SmsCallForegroundService).create()
-            val encryptedData = "$ids\n$type\n$data"
-
-            val request = Request.Builder()
-                .url(backendUrl)
-                .header("X-Auth-Key", secret)
-                .post(encryptedData.toRequestBody("text/plain".toMediaType()))
-                .build()
-
-            client.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    Log.e("SmsCallForegroundSvc", "Failed to send data", e)
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    response.use {
-                        if (!it.isSuccessful) {
-                            Log.e("SmsCallForegroundSvc", "Failed: ${it.code}")
-                        } else {
-                            Log.i("SmsCallForegroundSvc", "Data sent successfully (hash: $messageHash)")
-                        }
+    private suspend fun sendToBackendBulk(type: String, from: String, to: String, date: Long) {
+        val userIds = getUserIds()
+        val messages = JSONArray().apply {
+            put(JSONObject().apply {
+                put("ids", userIds)
+                when (type) {
+                    "call" -> {
+                        put("call", true)
+                        put("from", from)
+                        put("to", getSimName(to.toIntOrNull() ?: 1))
+                    }
+                    "sms" -> {
+                        put("sms", from)
                     }
                 }
             })
         }
+        sendToBackend(messages.toString())
     }
-}
+
+    private suspend fun sendTestNotification() {
+        val userIds = getUserIds()
+        val messages = JSONArray().apply {
+            put(JSONObject().apply {
+                put("ids", userIds)
+                put("sms", "Test notification from ${getDeviceName()} at ${System.currentTimeMillis()}")
+            })
+        }
+        sendToBackend(messages.toString())
+    }
+
+    private suspend fun sendToBackend(jsonBody: String) {
+        val backendUrl = validateAndFixUrl(dataStore.backendUrl.first())
+        val authKey = dataStore.secret.first()
+        val notifyBackend = dataStore.notifyBackend.first()
+
+        if (!notifyBackend || backendUrl.isEmpty() || authKey.isEmpty()) {
+            Log.d("SmsCallForegroundSvc", "Backend not configured")
+            return
+        }
+
+        val client = MyHttpClient(this).create()
+
+        val request = Request.Builder()
+            .url(backendUrl)
+            .addHeader("X-Auth-Key", authKey)
+            .addHeader("Content-Type", "application/json")
+            .post(jsonBody.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("SmsCallForegroundSvc", "Backend request failed: ${e.message}")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    when (response.code) {
+                        200, 207 -> Log.d("SmsCallForegroundSvc", "Messages sent: ${response.code}")
+                        else -> Log.e("SmsCallForegroundSvc", "Backend error: ${response.code}")
+                    }
+                }
+            }
+        })
+    }
+
+    private suspend fun checkBackendHealth() {
+        val backendUrl = validateAndFixUrl(dataStore.backendUrl.first())
+        if (backendUrl.isEmpty()) return
+
+        val client = MyHttpClient(this).create()
+        val request = Request.Builder()
+            .url(backendUrl.replace("/receive_data", ""))
+            .get()
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            @RequiresApi(Build.VERSION_CODES.M)
+            override fun onFailure(call: Call, e: IOException) {
+                showBackendErrorNotification("Backend unreachable")
+            }
+
+            @RequiresApi(Build.VERSION_CODES.M)
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (response.code != 200) {
+                        showBackendErrorNotification("Backend error: ${response.code}")
+                    } else {
+                        Log.d("SmsCallForegroundSvc", "Backend is healthy")
+                    }
+                }
+            }
+        })
+    }
+
+    @RequiresApi(Build.VERSION_CODES.M)
+    private fun showBackendErrorNotification(message: String) {
+        val channelId = "BackendErrorChannel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Backend Status",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Backend Error")
+            .setContentText(message)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setSound(null)
+            .setVibrate(null)
+            .build()
+
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        notificationManager.notify(2, notification)
+    }
+
+    private suspend fun getUserIds(): String {
+        return try {
+            dataStore.ids.first()
+        } catch (e: Exception) {
+            Log.e("SmsCallForegroundSvc", "Error reading user IDs: ${e.message}")
+            ""
+        }
+    }
+
+    private fun getSimName(simSlot: Int): String {
+        val defaultName = "SIM $simSlot"
+        return defaultName
+    }
+
+    private fun getDeviceName(): String {
+        return Build.MODEL
+    }
 
     private fun validateAndFixUrl(url: String): String {
         var fixedUrl = url.trim()
@@ -361,5 +443,6 @@ class SmsCallForegroundService : Service() {
                 "https://$fixedUrl"
             }
         }
-        return if (!fixedUrl.endsWith("/")) "$fixedUrl/receive_data" else "$fixedUrl/receive_data"
+        return if (!fixedUrl.endsWith("/receive_data")) "$fixedUrl/receive_data" else fixedUrl
     }
+}

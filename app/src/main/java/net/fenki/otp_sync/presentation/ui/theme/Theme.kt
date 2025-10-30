@@ -76,6 +76,7 @@ fun Otp_syncTheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
-        content = content
+        content = content,
+        typography = AppTypography
     )
 }
